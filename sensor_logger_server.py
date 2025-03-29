@@ -5,6 +5,7 @@ import librosa
 import os
 import io
 import tensorflow_hub as hub  # Import YAMNet model
+import pyttsx3  # Import TTS for announcements
 
 # Load the trained model
 model = tf.keras.models.load_model("fine_tuned_yamnet.h5")
@@ -22,10 +23,18 @@ app = Flask(__name__)
 if not os.path.exists('uploads'):
     os.makedirs('uploads')
 
-# Function to process raw audio data using YAMNet
+# Initialize text-to-speech engine
+engine = pyttsx3.init()
 
+# Function to announce detected events via Bluetooth speaker
+def speak_alert(message):
+    """Uses TTS engine to announce detected events."""
+    engine.say(message)
+    engine.runAndWait()
+
+# Function to process raw audio data using YAMNet
 def process_audio_data(waveform, sr):
-    """Extracts embeddings from audio using YAMNet."""
+    """Extracts embeddings from audio using YAMNet and makes a prediction."""
     waveform = waveform.astype(np.float32)  # Ensure float32 type
     waveform = waveform / np.max(np.abs(waveform))  # Normalize audio
 
@@ -40,47 +49,39 @@ def process_audio_data(waveform, sr):
     predictions = model.predict(embeddings)
     predicted_label = CATEGORIES[np.argmax(predictions)]
 
+    # Announce the detected sound
+    alert_message = f"{predicted_label} detected!"
+    print(alert_message)  # Log the event
+    speak_alert(alert_message)  # Announce via Bluetooth speaker
+
     return predicted_label
 
-# Route to handle live streaming from the phone
+# Route to handle file upload and prediction
 @app.route('/predict', methods=['POST'])
 def predict():
     try:
-        # Get the raw audio bytes from the request
-        audio_data = request.data
+        # Check if a file is part of the request
+        if 'file' not in request.files:
+            return jsonify({'error': 'No file part'}), 400
 
-        # Convert byte data to numpy array
-        waveform, sr = librosa.load(io.BytesIO(audio_data), sr=None)
+        file = request.files['file']
+        if file.filename == '':
+            return jsonify({'error': 'No selected file'}), 400
 
-        # Process and predict
-        prediction = process_audio_data(waveform, sr)
+        # Save the file to the uploads directory
+        file_path = os.path.join('uploads', file.filename)
+        file.save(file_path)
 
-        return jsonify({"prediction": prediction})
+        # Load the audio file using librosa
+        audio_data, sr = librosa.load(file_path, sr=None)
+
+        # Process and predict the audio
+        prediction = process_audio_data(audio_data, sr)
+
+        return jsonify({'prediction': prediction}), 200
 
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-# Endpoint to handle file upload and prediction
-@app.route('/upload', methods=['POST'])
-def upload_file():
-    if 'file' not in request.files:
-        return jsonify({'error': 'No file part'}), 400
-
-    file = request.files['file']
-    if file.filename == '':
-        return jsonify({'error': 'No selected file'}), 400
-
-    # Save the file
-    file_path = os.path.join('uploads', file.filename)
-    file.save(file_path)
-
-    # Load the audio file using librosa
-    audio_data, sr = librosa.load(file_path, sr=None)
-
-    # Process the audio file
-    prediction = process_audio_data(audio_data, sr)
-
-    return jsonify({'prediction': prediction}), 200
+        return jsonify({'error': str(e)}), 500
 
 # Run Flask server
 if __name__ == "__main__":
